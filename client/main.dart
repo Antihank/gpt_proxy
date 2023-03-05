@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter_markdown/flutter_markdown.dart';
 
 void main() => runApp(MyApp());
 
@@ -21,7 +21,6 @@ class MyApp extends StatelessWidget {
     );
   }
 }
-
 class Chat {
   final String username; // 用户名
   final String message; // 消息
@@ -74,8 +73,10 @@ class _MyHomePageState extends State<MyHomePage> {
   late User _selectedUser = User(username: '海绵宝宝');
   late List<User> _users = [_selectedUser];
   late bool remember = false;
+  late bool isSending = false;
 
   TextEditingController _textEditingController = TextEditingController();
+  ScrollController _listScrollController = ScrollController();
 
   @override
   void initState() {
@@ -104,10 +105,18 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _sendMessage(String message) async {
+    //如果消息为空，什么都不做
+    if (message.isEmpty) return;
     setState(() {
       //添加到聊天框
       _chats.add(Chat(username: _selectedUser.username, message: message));
+      //清理
+      _textEditingController.clear();
+      // 显示等待动画
+      isSending = true;
     });
+    _scrollToBottom();
+
     final response = await http.post(Uri.parse('$_serverUrl/chat'),
         body: json.encode({
           'username': _selectedUser.username,
@@ -123,9 +132,21 @@ class _MyHomePageState extends State<MyHomePage> {
       setState(() {
         _chats.add(
             Chat(username: result['username'], message: result['response']));
+        _textEditingController.clear();
+        isSending = false;
       });
-      _textEditingController.clear();
+      _scrollToBottom();
     }
+  }
+
+  Future<void> _scrollToBottom() async {
+    WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
+      _listScrollController.animateTo(
+        _listScrollController.position.maxScrollExtent,
+        duration: Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    });
   }
 
   /**
@@ -187,6 +208,31 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
+  Future<void> _inputChange(value) async {
+    // 如果正在发送，不做任何处理
+    if (isSending) return;
+
+    // 发送
+    // 按下了 shift+Enter
+    if (RawKeyboard.instance.keysPressed
+        .contains(LogicalKeyboardKey.shiftLeft)) {
+      // 结尾为\n时不发送，换行
+      setState(() {
+        // 如果按下了 Shift+Enter，则在输入框内添加一个换行符
+        _textEditingController.value = TextEditingValue(
+          text: value + '\n',
+          selection: TextSelection.collapsed(
+            offset: value.length,
+          ),
+        );
+      });
+      return;
+    }
+
+    // 按下了 Enter
+    _sendMessage(value);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -210,7 +256,7 @@ class _MyHomePageState extends State<MyHomePage> {
                         "添加一个新用户！",
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 24.0,
+                          fontSize: 32.0,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -282,6 +328,7 @@ class _MyHomePageState extends State<MyHomePage> {
             //消息框
             Expanded(
               child: ListView.builder(
+                controller: _listScrollController,
                 itemCount: _chats.length,
                 itemBuilder: (BuildContext context, int index) {
                   final message = _chats[index];
@@ -301,7 +348,7 @@ class _MyHomePageState extends State<MyHomePage> {
                               color: isMe ? Colors.blue : Colors.grey[200],
                               borderRadius: BorderRadius.circular(16.0),
                             ),
-                            child: Text(
+                            child: SelectableText(
                               message.message,
                               style: TextStyle(
                                 color: isMe ? Colors.white : Colors.black,
@@ -321,16 +368,16 @@ class _MyHomePageState extends State<MyHomePage> {
                   Flexible(
                     //输入框
                     child: CupertinoTextField(
-                      keyboardType: TextInputType.multiline,
-                      maxLines: null,
-                      controller: _textEditingController,
-                      onSubmitted: (value) => _sendMessage(value),
-                      placeholder: "Enter message",
-                      decoration: BoxDecoration(
-                        color: Colors.grey[200],
-                        borderRadius: BorderRadius.circular(16.0),
-                      ),
-                    ),
+                        textInputAction: TextInputAction.send,
+                        keyboardType: TextInputType.multiline,
+                        maxLines: null,
+                        controller: _textEditingController,
+                        placeholder: "Enter message",
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(16.0),
+                        ),
+                        onSubmitted: _inputChange),
                   ),
                   //文本
                   Text(" 记住对话"),
@@ -340,14 +387,15 @@ class _MyHomePageState extends State<MyHomePage> {
                     onChanged: _changeRemember,
                   ),
                   //提交按钮
-                  IconButton(
-                    icon: Icon(Icons.send),
-                    onPressed: () {
-                      _sendMessage(_textEditingController.text);
-                      //清理
-                      _textEditingController.clear();
-                    },
-                  ),
+                  if (isSending)
+                    Center(child: CircularProgressIndicator())
+                  else
+                    IconButton(
+                      icon: Icon(Icons.send),
+                      onPressed: () {
+                        _sendMessage(_textEditingController.text);
+                      },
+                    ),
                 ],
               ),
             ),
